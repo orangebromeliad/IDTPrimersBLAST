@@ -1,0 +1,74 @@
+#!/bin/bash
+
+#Assumes input of .csv file from IDT primers output ($1) and the sequences to BLAST against e.g. PccAS transcriptome sequences ($2)
+# e.g.
+#>primer1
+#CACCATCACGACTA
+#primer 2
+#etc...
+
+#Making a temporary directory
+dirname=$(echo $1 | awk '{gsub(".csv","_dir"); print}')
+mkdir blast_primers_$dirname
+
+# IDT primer files have Forward, Probe, Reverse sequences saved in that order
+# grep -A 2 gets the matched lines and the following two | piped into awk which gsubs out any unwanted characters and whitespace and adds a '>' 
+# 	and newline '\n' between sequence name (awk $2) and sequence (awk $3)
+
+grep -A 2 'Forward' $1| awk -F "\"*,\"*" '{gsub(" ",""); print ">" $2 "\n" $3; gsub(">$","")}' > blast_primers_$dirname/primers.txt
+
+#Make a .txt file of each group of primers and probes by looping over the number of Forward primers
+#Gets the indices of the primers in the primers.txt file with grep -n and awk.
+num=1
+for i in $(grep -n Forward blast_primers_$dirname/primers.txt| awk -F: '{print $1}');
+do
+	head -n $((i+5)) blast_primers_$dirname/primers.txt | tail -n 6 > blast_primers_$dirname/primers_$num.txt; #First i+5 lines of file (head) and then last 6 lines of this output (tail)
+	#$num is used to create new numbers for the txt files
+	num=$((num + 1)); #increase num by 1 each time loop runs
+done
+
+for primerfiles in $(ls blast_primers_$dirname | grep primers_);
+do
+	echo $primerfiles
+	#Getting the two lines for each gene 
+	head -n 2 blast_primers_$dirname/$primerfiles > blast_primers_$dirname/gene1.fa
+	head -n 4 blast_primers_$dirname/$primerfiles | tail -n 2 > blast_primers_$dirname/gene2.fa
+	head -n 6 blast_primers_$dirname/$primerfiles | tail -n 2 > blast_primers_$dirname/gene3.fa	
+
+	# BLAST using 'blastn-short' and only printing the top 50 sequences 
+	# (note that this may be a long list of similar e value alignments at the end, and in this case it orders by decreasing gene loci number and would then cut off early chrom alignments)
+	# Write results to blast_primers_$dirname folder
+
+	echo 'Blasting 1'
+	blastn -db $2 -query blast_primers_$dirname/gene1.fa -out blast_primers_$dirname/results1.out -evalue 1000 -task 'blastn-short' -max_target_seqs 50
+	echo 'Blasting 2'
+	blastn -db $2 -query blast_primers_$dirname/gene2.fa -out blast_primers_$dirname/results2.out -evalue 1000 -task 'blastn-short' -max_target_seqs 50
+	echo 'Blasting 3'
+	blastn -db $2 -query blast_primers_$dirname/gene3.fa -out blast_primers_$dirname/results3.out -evalue 1000 -task 'blastn-short' -max_target_seqs 50
+
+	#cat to open results | grep for the '>' opener of the gene name list | awk to remove the word 'gene=' and get the gene name from grep
+	cat blast_primers_$dirname/results1.out | grep \> | awk '{gsub("gene=",""); print $3;}' > blast_primers_$dirname/blast_genes_1.txt
+	cat blast_primers_$dirname/results2.out | grep \> | awk '{gsub("gene=",""); print $3;}' > blast_primers_$dirname/blast_genes_2.txt
+	cat blast_primers_$dirname/results3.out | grep \> | awk '{gsub("gene=",""); print $3;}' > blast_primers_$dirname/blast_genes_3.txt	
+
+	echo 'Gene1 v Gene2 matches'
+	VAR1=$(while read gene; do grep "$gene" blast_primers_$dirname/blast_genes_2.txt; done < blast_primers_$dirname/blast_genes_1.txt)
+	echo $VAR1 	
+
+	echo 'Gene1 v Gene3 matches'
+	VAR2=$(while read gene; do grep "$gene" blast_primers_$dirname/blast_genes_3.txt; done < blast_primers_$dirname/blast_genes_1.txt)
+	echo $VAR2	
+
+	echo 'Gene2 v Gene3 matches'
+	VAR3=$(while read gene; do grep "$gene" blast_primers_$dirname/blast_genes_2.txt; done < blast_primers_$dirname/blast_genes_3.txt)
+	echo $VAR3
+
+	echo 'Genes that both primers and the probe BLAST to'
+	for i in $VAR2; 
+	do 
+		echo $VAR1|tr ' ' '\n'| grep $i;
+		#tr changes whitespace to new-line so that grep will only print the matches
+	done
+
+done
+
